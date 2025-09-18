@@ -1,0 +1,85 @@
+{
+  "status": "success",
+  "files": [
+    {
+      "original_name": "arquivo1.txt",
+      "corrected_url": "/media/corrigidos/arquivo1_corrigido_91b09b27.txt",
+      "sped_type": "fiscal",
+      "issues": [
+        {
+          "line_no": 33,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900111226116, valor=656",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        }
+      ],
+      "status": "success"
+    },
+    {
+      "original_name": "arquivo_auditado.txt",
+      "corrected_url": "/media/corrigidos/arquivo_auditado_corrigido_ba98b977.txt",
+      "sped_type": "fiscal",
+      "issues": [
+        {
+          "line_no": 34,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        },
+        {
+          "line_no": 35,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        },
+        {
+          "line_no": 36,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        },
+        {
+          "line_no": 37,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        },
+        {
+          "line_no": 38,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        },
+        {
+          "line_no": 39,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        },
+        {
+          "line_no": 40,
+          "reg": "C170",
+          "rule_id": "RC170",
+          "severity": "error",
+          "message": "Item duplicado na nota 42190724964135000135550010000017811324071214: codigo=1900112226226, valor=809",
+          "suggestion": "Manter apenas ultima ocorrencia"
+        }
+      ],
+      "status": "success"
+    }
+  ]
+}

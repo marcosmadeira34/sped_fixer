@@ -427,7 +427,7 @@ class R107_CFOPFormatoInvalido(Rule):
                 rule_id=self.id,
                 severity="error",
                 message=f"CFOP {cfop} com formatação inválida",
-                suggestion="Remover caracteres não numéricos"
+                suggestion="Remover caracteres nao numericos"
             )]
         return []
     

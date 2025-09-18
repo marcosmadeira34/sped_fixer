@@ -1,28 +1,22 @@
+# sped_fixer/core/rules/main_rules.py
 from .basic_rules_fiscal import (
-    R001_HeaderObrigatorio,    R002_VersaoLayout,
-    R003_CNPJValido,    R004_IEFormato,
-    R005_DataAberturaFechamento,    R006_LinhasSemEspacos,
-    R007_DuplicateCNPJ,    R008_OrphanedCadastro,
-    R009_InvalidIE,    R013_InventoryItemWithoutProduct,
-    R014_InventoryValueMismatch,    R015_DuplicateDocument,
-    R017_InvalidCFOP,    R021_SimplesNacionalCredit,
-    R025_DebitTotalMismatch,    R027_ExcessSpaces,
-    R028_NumericFormat,    R031_EmptyBlocks,
-    R032_CNPJNameMismatch,    R033_IENameMismatch,
-    R034_CNPJVazio, R110_ValoresPISCOFINSFiscal,
-    R035_Registro0000Estrutura, R036_Registro0000CamposObrigatorios,
-    
+    R015_DuplicateDocument, RC170_DuplicateDocument_C170, 
+    RC850_DupicateDocument_C850, TotalizadorBlocoC_vs_BlocoE,
+    ConsistenciaC170_vs_C100, SPEDComparator
 )
 
-from .basic_rules_contribuicoes import (
-    R101_CSTPISInvalido, R102_CSTCOFINSInvalido,
-    R103_CreditoPISDivergente, R104_CreditoCOFINSDivergente,
-    R105_AliquotaPISInvalida, R106_AliquotaCOFINSInvalida,
-    R107_CFOPFormatoInvalido
+# from .basic_rules_contribuicoes import (
+#     R101_CSTPISInvalido, R102_CSTCOFINSInvalido,
+#     R103_CreditoPISDivergente, R104_CreditoCOFINSDivergente,
+#     R105_AliquotaPISInvalida, R106_AliquotaCOFINSInvalida,
+#     R107_CFOPFormatoInvalido
     
-)
+# )
 
 from .base import Issue, SPEDTypeIdentifier
+
+
+
 
 # Classe Principal de Correção com todas as regras, tanto sped fiscal quanto contribuições
 class SPEDAutoFixer:
@@ -65,49 +59,48 @@ class SPEDAutoFixer:
     def _get_rules_for_type(self):
         # Regras comuns a ambos os tipos
         common_rules = [
-            R007_DuplicateCNPJ(),
-            R008_OrphanedCadastro(),
-            R009_InvalidIE(),
-            R027_ExcessSpaces(),
-            R028_NumericFormat(),
-            R031_EmptyBlocks(),
-            R032_CNPJNameMismatch(),
-            R033_IENameMismatch(),
-            R034_CNPJVazio(),
-            R035_Registro0000Estrutura(),
-            R036_Registro0000CamposObrigatorios(),
-            R107_CFOPFormatoInvalido()
+            # R007_DuplicateCNPJ(),
+            # # R008_OrphanedCadastro(),
+            # R009_InvalidIE(),
+            # R027_ExcessSpaces(),
+            # # R028_NumericFormat(),
+            # R031_EmptyBlocks(),
+            # R032_CNPJNameMismatch(),
+            # R033_IENameMismatch(),
+            # R034_CNPJVazio(),
+            # # R035_Registro0000Estrutura(),
+            # R036_Registro0000CamposObrigatorios(),
+            # # R107_CFOPFormatoInvalido()
+            
         ]
         
         # Regras específicas para SPED Fiscal
         fiscal_rules = [
-            R003_CNPJValido(),
-            R005_DataAberturaFechamento(),
-            R013_InventoryItemWithoutProduct(),
-            R014_InventoryValueMismatch(),
             R015_DuplicateDocument(),
-            R017_InvalidCFOP(),
-            R021_SimplesNacionalCredit(),
-            R025_DebitTotalMismatch(),
-            R110_ValoresPISCOFINSFiscal()
+            RC170_DuplicateDocument_C170(),
+            RC850_DupicateDocument_C850(),
+            TotalizadorBlocoC_vs_BlocoE(),
+            ConsistenciaC170_vs_C100(),
+            
+            
         ]
         
         # Regras específicas para SPED Contribuições
-        contrib_rules = [
-            R101_CSTPISInvalido(),
-            R102_CSTCOFINSInvalido(),
-            R103_CreditoPISDivergente(),
-            R104_CreditoCOFINSDivergente(),
-            R105_AliquotaPISInvalida(),
-            R106_AliquotaCOFINSInvalida()
-        ]
+        # contrib_rules = [
+        #     R101_CSTPISInvalido(),
+        #     R102_CSTCOFINSInvalido(),
+        #     R103_CreditoPISDivergente(),
+        #     R104_CreditoCOFINSDivergente(),
+        #     R105_AliquotaPISInvalida(),
+        #     R106_AliquotaCOFINSInvalida()
+        # ]
         
         if self.sped_type == "fiscal":
             return common_rules + fiscal_rules
-        elif self.sped_type == "contrib":
-            return common_rules + contrib_rules
-        elif self.sped_type == "both":
-            return common_rules + fiscal_rules + contrib_rules
+        # elif self.sped_type == "contrib":
+        #     return common_rules + contrib_rules
+        # elif self.sped_type == "both":
+        #     return common_rules + fiscal_rules + contrib_rules
         else:
             return common_rules  # Fallback para regras básicas
     
@@ -142,6 +135,8 @@ class SPEDAutoFixer:
     def get_sped_type(self):
         """Retorna o tipo de SPED"""
         return self.sped_type
+    
+  
 
 
 class Record:
@@ -149,6 +144,12 @@ class Record:
         self.line_no = line_no
         self.reg = reg
         self.fields = fields
+
+    def __str__(self):
+        return f"Registro {self.reg} (linha {self.line_no}): {self.fields}"
+    
+    def __repr__(self):
+        return self.__str__()
 
 class SpedFile:
     def __init__(self, records):
@@ -162,3 +163,34 @@ class Context:
         """Remove um registro da lista"""
         if record in self.records:
             self.records.remove(record)
+
+
+class ImpactAnalyzer:
+    def __init__(self, context):
+        self.context = context
+        self.dependency_graph = self._build_dependency_graph()  # Grafo de registros dependentes
+
+    def _build_dependency_graph(self):
+        # Mapeia dependências: C100 -> C170 -> C190 -> Bloco E (E110)
+        graph = {}
+        for record in self.context.records:
+            if record.reg == "C100":
+                graph[record] = {"children": [], "impacts": ["C170", "C190", "E110"]}
+            elif record.reg == "C170":
+                graph[record] = {"children": [], "impacts": ["C190", "E110"]}
+            elif record.reg == "C190":
+                graph[record] = {"children": [], "impacts": ["E110"]}
+        return graph
+
+    def trace_impact(self, problematic_record):
+        # Retorna todos os registros afetados por um erro
+        impacts = []
+        queue = [problematic_record]
+        while queue:
+            current = queue.pop(0)
+            impacts.append(current)
+            for child in self.dependency_graph.get(current, {}).get("children", []):
+                queue.append(child)
+        return impacts
+    
+

@@ -16,9 +16,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from core.views import compare_sped_files
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('core.urls')),
+        path('compare-sped/', compare_sped_files, name='compare_sped'),
 ]
