@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QColor, QTextCharFormat, QTextCursor, QPalette,
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 
-API_URL = "http://localhost:8001/fix-sped/"
+API_URL = "http://localhost:8001/compare-sped/"
 
 class ModernSPEDComparatorApp(QWidget):
     def __init__(self):
@@ -44,6 +44,86 @@ class ModernSPEDComparatorApp(QWidget):
         palette.setColor(QPalette.Highlight, QColor("#0066cc"))
         palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
         self.setPalette(palette)
+
+
+    def browse_file(self, file_num):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, f"Selecione o arquivo {file_num}", "", 
+            "Arquivos SPED (*.txt *.sped);;Todos os arquivos (*)"
+        )
+        if filename:
+            if file_num == 1:
+                self.file1_path = filename
+                self.file1_edit.setText(filename)
+            else:
+                self.file2_path = filename
+                self.file2_edit.setText(filename)
+            
+            self.status_label.setText(f"Arquivo {file_num} selecionado: {os.path.basename(filename)}")
+            self.status_indicator.setStyleSheet("background-color: #ffc107;")
+
+    
+    def compare_files(self):
+        if not self.file1_path or not self.file2_path:
+            QMessageBox.critical(self, "Erro", "Selecione ambos os arquivos para comparação!")
+            return
+
+        try:
+            self.status_label.setText("Comparando arquivos via API...")
+            self.status_indicator.setStyleSheet("background-color: #17a2b8;")
+
+            # Função para ler arquivo com várias codificações
+            def read_file_with_fallback(file_path):
+                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'cp850']
+                
+                for encoding in encodings:
+                    try:
+                        with open(file_path, 'r', encoding=encoding) as f:
+                            return f.read()
+                    except UnicodeDecodeError:
+                        continue
+                
+                # Se nenhuma codificação funcionar, lê como binário e decodifica com replace
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                return content.decode('utf-8', errors='replace')
+
+            # Lê o conteúdo dos arquivos
+            content1 = read_file_with_fallback(self.file1_path)
+            content2 = read_file_with_fallback(self.file2_path)
+
+            # Cria arquivos em memória para enviar
+            from io import BytesIO
+            import io
+
+            # Converte para bytes usando UTF-8
+            file1_bytes = content1.encode('utf-8')
+            file2_bytes = content2.encode('utf-8')
+
+            # Cria objetos de arquivo em memória
+            file1 = io.BytesIO(file1_bytes)
+            file2 = io.BytesIO(file2_bytes)
+
+            files = [
+                ("cliente_file", file1),
+                ("escritorio_file", file2)
+            ]
+            data = {"sped_type": "fiscal"}
+            response = requests.post(API_URL, files=files, data=data)
+
+            if response.status_code != 200:
+                raise Exception(f"Erro na API: {response.text}")
+
+            result = response.json()
+            self.display_log(result)
+            self.generate_btn.setEnabled(True)
+            self.status_label.setText("Comparação concluída!")
+            self.status_indicator.setStyleSheet("background-color: #28a745;")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha na comparação: {str(e)}")
+            self.status_label.setText("Erro na comparação")
+            self.status_indicator.setStyleSheet("background-color: #dc3545;")
 
     def create_widgets(self):
         main_layout = QVBoxLayout(self)
@@ -266,262 +346,280 @@ class ModernSPEDComparatorApp(QWidget):
         """)
         self.clear_btn.clicked.connect(self.clear_logs)
 
-        # NOVO BOTÃO DE IMPRESSÃO
         self.download_btn = QPushButton("Baixar Logs")
         self.download_btn.setCursor(Qt.PointingHandCursor)
-        self.download_btn.setStyleSheet(self.clear_btn.styleSheet())  # Mesmo estilo do botão Limpar
+        self.download_btn.setStyleSheet(self.clear_btn.styleSheet())
         self.download_btn.clicked.connect(self.download_logs)
 
         action_layout.addWidget(self.compare_btn)
         action_layout.addWidget(self.generate_btn)
         action_layout.addWidget(self.clear_btn)
-        action_layout.addWidget(self.download_btn)  # Adicione esta linha
+        action_layout.addWidget(self.download_btn)
         action_layout.addStretch()
         
         files_layout.addLayout(action_layout)
         
         main_splitter.addWidget(files_widget)
         
-        # Área de logs com destaque
-        log_widget = QWidget()
-        log_layout = QVBoxLayout(log_widget)
-        log_layout.setContentsMargins(0, 0, 0, 0)
+        # Área de resultados (substitui a área de logs)
+        self.results_widget = QWidget()
+        self.results_layout = QVBoxLayout(self.results_widget)
+        self.results_layout.setContentsMargins(0, 0, 0, 0)
         
-        log_header = QHBoxLayout()
-        log_title = QLabel("Logs de Comparação")
-        log_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        log_title.setStyleSheet("color: #343a40;")
-        
-        log_options = QHBoxLayout()
-        log_options.addStretch()
-        
-        self.log_table = QTableWidget()
-        self.log_table.setColumnCount(6)
-        self.log_table.setHorizontalHeaderLabels(["Arquivo", "Linha", "Registro", "Regra", "Mensagem", "Sugestão"])
-        self.log_table.horizontalHeader().setStretchLastSection(True)
-        self.log_table.horizontalHeader().setStyleSheet("""
-            QHeaderView::section {
-                background-color: #343a40;
-                color: white;
-                padding: 6px;
-                border: none;
-                border-right: 1px solid #212529;
-                font-weight: bold;
-            }
+        # Placeholder inicial
+        self.results_placeholder = QLabel("Selecione os arquivos e clique em 'Comparar Arquivos'")
+        self.results_placeholder.setAlignment(Qt.AlignCenter)
+        self.results_placeholder.setStyleSheet("""
+            font-size: 16px;
+            color: #6c757d;
+            padding: 40px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
         """)
-        self.log_table.verticalHeader().setVisible(False)
-        self.log_table.setAlternatingRowColors(False)
-        self.log_table.setStyleSheet("""
-            QTableWidget {
-                background-color: #212529;
-                color: #f8f9fa;
-                border: 1px solid #343a40;
-                border-radius: 6px;
-                gridline-color: #343a40;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 9pt;
-            }
-            QTableWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #343a40;
-            }
-            QTableWidget::item:selected {
-                background-color: #0066cc;
-            }
-            QScrollBar:vertical {
-                background: #343a40;
-                width: 12px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: #6c757d;
-                border-radius: 6px;
-                min-height: 20px;
-            }
-        """)
-
-        # Configure as colunas para terem larguras adequadas
-        self.log_table.setColumnWidth(0, 200)  # Arquivo
-        self.log_table.setColumnWidth(1, 60)   # Linha
-        self.log_table.setColumnWidth(2, 80)   # Registro
-        self.log_table.setColumnWidth(3, 80)   # Regra
-        self.log_table.setColumnWidth(4, 300)  # Mensagem
-        self.log_table.setColumnWidth(5, 300)  # Sugestão
-
-        log_layout.addWidget(self.log_table, 1)
+        self.results_layout.addWidget(self.results_placeholder)
         
-        main_splitter.addWidget(log_widget)
-        main_splitter.setSizes([300, 500])  # 30% para arquivos, 70% para logs
+        main_splitter.addWidget(self.results_widget)
+        main_splitter.setSizes([300, 500])
         
         main_layout.addWidget(main_splitter, 1)
-
-    def browse_file(self, file_num):
-        filename, _ = QFileDialog.getOpenFileName(
-            self, f"Selecione o arquivo {file_num}", "", 
-            "Arquivos SPED (*.txt *.sped);;Todos os arquivos (*)"
-        )
-        if filename:
-            if file_num == 1:
-                self.file1_path = filename
-                self.file1_edit.setText(filename)
-            else:
-                self.file2_path = filename
-                self.file2_edit.setText(filename)
-            
-            self.status_label.setText(f"Arquivo {file_num} selecionado: {os.path.basename(filename)}")
-            self.status_indicator.setStyleSheet("background-color: #ffc107;")
-
-    def compare_files(self):
-        if not self.file1_path or not self.file2_path:
-            QMessageBox.critical(self, "Erro", "Selecione ambos os arquivos para comparação!")
-            return
-
-        try:
-            self.status_label.setText("Comparando arquivos via API...")
-            self.status_indicator.setStyleSheet("background-color: #17a2b8;")
-
-            with open(self.file1_path, "rb") as file1, open(self.file2_path, "rb") as file2:
-                files = [
-                    ("files", file1),
-                    ("files", file2)
-                ]
-                data = {"sped_type": "fiscal"}
-                response = requests.post(API_URL, files=files, data=data)
-
-            if response.status_code != 200:
-                raise Exception(f"Erro na API: {response.text}")
-
-            result = response.json()
-            self.display_log(result)
-            self.generate_btn.setEnabled(True)
-            self.status_label.setText("Comparação concluída!")
-            self.status_indicator.setStyleSheet("background-color: #28a745;")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha na comparação: {str(e)}")
-            self.status_label.setText("Erro na comparação")
-            self.status_indicator.setStyleSheet("background-color: #dc3545;")
-
-    def display_log(self, api_response):
-        self.log_table.setRowCount(0)  # Limpa a tabela
-        total_changed = 0
-
-        # Linha de título do relatório
-        self.log_table.insertRow(0)
-        self.log_table.setItem(0, 0, QTableWidgetItem("RELATÓRIO DE COMPARAÇÃO"))
-        self.log_table.setSpan(0, 0, 1, 6)
-
-        header_item = self.log_table.item(0, 0)
-        header_item.setTextAlignment(Qt.AlignCenter)
-        header_item.setBackground(QColor("#212529"))
-        header_item.setForeground(QColor("#ffffff"))
-        header_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-
-        row = 1  # começa depois do cabeçalho
-
-        for file_info in api_response.get("files", []):
-            # Caso de COMPARAÇÃO (similaridade + divergências)
-            if "similarity" in file_info and "divergences" in file_info:
-                similarity = file_info.get("similarity", 0)
-                divergences = file_info.get("divergences", [])
-
-                # Linha com a similaridade
-                self.log_table.insertRow(row)
-                self.log_table.setItem(row, 0, QTableWidgetItem(f"Similaridade: {similarity}%"))
-                self.log_table.setSpan(row, 0, 1, 6)
-                self.log_table.item(row, 0).setForeground(QColor("#00ff99"))
-                row += 1
-
-                # Divergências
-                for d in divergences:
-                    self.log_table.insertRow(row)
-                    self.log_table.setItem(row, 0, QTableWidgetItem("Comparação"))
-                    self.log_table.setItem(row, 1, QTableWidgetItem(str(d.get("line_no", ""))))
-                    self.log_table.setItem(row, 2, QTableWidgetItem(str(d.get("reg", ""))))
-                    self.log_table.setItem(row, 3, QTableWidgetItem(""))  # sem regra
-                    self.log_table.setItem(row, 4, QTableWidgetItem(str(d.get("value_a", ""))))
-                    self.log_table.setItem(row, 5, QTableWidgetItem(str(d.get("value_b", ""))))
-                    row += 1
-
-            # Caso de CORREÇÃO (erros por arquivo)
-            else:
-                file_name = str(file_info.get("original_name", "Desconhecido"))
-                sped_type = str(file_info.get("sped_type", ""))
-                issues = file_info.get("issues", [])
-
-                # Cabeçalho do arquivo
-                self.log_table.insertRow(row)
-                self.log_table.setItem(row, 0, QTableWidgetItem(f"{file_name} ({sped_type})"))
-                self.log_table.setSpan(row, 0, 1, 6)
-
-                file_header_item = self.log_table.item(row, 0)
-                file_header_item.setBackground(QColor("#212529"))
-                file_header_item.setForeground(QColor("#ffffff"))
-                file_header_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-                row += 1
-
-                if not issues:  # caso sem problemas
-                    self.log_table.insertRow(row)
-                    self.log_table.setItem(row, 0, QTableWidgetItem("Nenhuma inconsistência encontrada"))
-                    self.log_table.setSpan(row, 0, 1, 6)
-
-                    no_issues_item = self.log_table.item(row, 0)
-                    no_issues_item.setBackground(QColor("#212529"))
-                    no_issues_item.setForeground(QColor("#ffffff"))
-                    row += 1
-                else:
-                    for issue in issues:
-                        line = str(issue.get("line_no", ""))
-                        reg = str(issue.get("reg", ""))
-                        rule = str(issue.get("rule_id", ""))
-                        msg = str(issue.get("message", ""))
-                        suggestion = str(issue.get("suggestion", ""))
-
-                        self.log_table.insertRow(row)
-
-                        self.log_table.setItem(row, 0, QTableWidgetItem(file_name))
-                        self.log_table.setItem(row, 1, QTableWidgetItem(line))
-                        self.log_table.setItem(row, 2, QTableWidgetItem(reg))
-                        self.log_table.setItem(row, 3, QTableWidgetItem(rule))
-                        self.log_table.setItem(row, 4, QTableWidgetItem(msg))
-                        self.log_table.setItem(row, 5, QTableWidgetItem(suggestion))
-
-                        # Formata cores
-                        for col in range(6):
-                            item = self.log_table.item(row, col)
-                            item.setBackground(QColor("#212529"))
-
-                            if col == 4:  # mensagem em vermelho
-                                item.setForeground(QColor("#ff5555"))
-                            else:
-                                item.setForeground(QColor("#ffffff"))
-
-                            if col == 1:  # coluna linha centralizada
-                                item.setTextAlignment(Qt.AlignCenter)
-
-                        total_changed += 1
-                        row += 1
-
-                # Linha em branco entre arquivos
-                self.log_table.insertRow(row)
-                blank_item = QTableWidgetItem("")
-                blank_item.setBackground(QColor("#212529"))
-                self.log_table.setItem(row, 0, blank_item)
-                self.log_table.setSpan(row, 0, 1, 6)
-                row += 1
-
-        # Linha de resumo final
-        self.log_table.insertRow(row)
-        self.log_table.setItem(row, 0, QTableWidgetItem(f"RESUMO: Alterados: {total_changed}"))
-        self.log_table.setSpan(row, 0, 1, 6)
-
-        summary_item = self.log_table.item(row, 0)
-        summary_item.setTextAlignment(Qt.AlignCenter)
-        summary_item.setBackground(QColor("#212529"))
-        summary_item.setForeground(QColor("#ffffff"))
-        summary_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-
         
+    def display_log(self, api_response):
+        # Limpa o layout de resultados
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Cabeçalho do relatório
+        header = QLabel("RELATÓRIO DE ANÁLISE SPED")
+        header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("""
+            font-size: 16px;
+            font-weight: bold;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        """)
+        self.results_layout.addWidget(header)
+        
+        # Container principal para as duas colunas
+        columns_container = QWidget()
+        columns_layout = QHBoxLayout(columns_container)
+        columns_layout.setSpacing(20)
+        
+        # Coluna do Cliente
+        cliente_column = QWidget()
+        cliente_layout = QVBoxLayout(cliente_column)
+        cliente_layout.setSpacing(10)
+        
+        cliente_header = QLabel("ARQUIVO DO CLIENTE")
+        cliente_header.setStyleSheet("""
+            font-weight: bold;
+            font-size: 14px;
+            padding: 8px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        """)
+        cliente_layout.addWidget(cliente_header)
+        
+        # Resumo do cliente
+        resumo_cliente = api_response.get("resumo_impacto_cliente", {})
+        resumo_cliente_text = QLabel(
+            f"Problemas: {resumo_cliente.get('total_problemas', 0)}\n"
+            f"Impacto: R$ {resumo_cliente.get('valor_impacto_estimado', 0):.2f}\n"
+            f"Blocos: {', '.join(resumo_cliente.get('blocos_afetados', []))}"
+        )
+        resumo_cliente_text.setStyleSheet("""
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+        """)
+        cliente_layout.addWidget(resumo_cliente_text)
+        
+        # Registros faltantes no cliente
+        only_cliente = api_response.get("comparacao_detalhada", {}).get("only_cliente", [])
+        if only_cliente:
+            faltantes_header = QLabel("REGISTROS FALTANTES")
+            faltantes_header.setStyleSheet("""
+                font-weight: bold;
+                font-size: 12px;
+                color: #dc3545;
+                padding: 5px 0;
+            """)
+            cliente_layout.addWidget(faltantes_header)
+            
+            for reg in only_cliente:
+                reg_info = reg.get("record", {})
+                if isinstance(reg_info, dict):
+                    reg_tipo = reg_info.get("reg", "N/A")
+                    reg_linha = reg_info.get("line_no", "N/A")
+                else:
+                    reg_tipo = "N/A"
+                    reg_linha = "N/A"
+                
+                impacto = reg.get("impacto", 0)
+                
+                reg_text = QLabel(f"{reg_tipo} - Linha: {reg_linha} - R$ {impacto:.2f}")
+                reg_text.setStyleSheet("""
+                    background-color: #fff5f5;
+                    border: 1px solid #f5c6cb;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin: 2px 0;
+                """)
+                cliente_layout.addWidget(reg_text)
+        
+        # Problemas do cliente
+        issues_cliente = api_response.get("issues_cliente", [])
+        if issues_cliente:
+            problemas_header = QLabel("PROBLEMAS")
+            problemas_header.setStyleSheet("""
+                font-weight: bold;
+                font-size: 12px;
+                color: #fd7e14;
+                padding: 5px 0;
+            """)
+            cliente_layout.addWidget(problemas_header)
+            
+            for issue in issues_cliente:
+                issue_text = QLabel(
+                    f"Linha {issue.get('line_no', '')}: {issue.get('message', '')}\n"
+                    f"Sugestão: {issue.get('suggestion', '')}"
+                )
+                issue_text.setStyleSheet("""
+                    background-color: #fff8f0;
+                    border: 1px solid #ffeaa7;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin: 2px 0;
+                """)
+                cliente_layout.addWidget(issue_text)
+        
+        cliente_layout.addStretch()
+        columns_layout.addWidget(cliente_column, 1)
+        
+        # Coluna do Escritório
+        escritorio_column = QWidget()
+        escritorio_layout = QVBoxLayout(escritorio_column)
+        escritorio_layout.setSpacing(10)
+        
+        escritorio_header = QLabel("ARQUIVO DO ESCRITÓRIO")
+        escritorio_header.setStyleSheet("""
+            font-weight: bold;
+            font-size: 14px;
+            padding: 8px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        """)
+        escritorio_layout.addWidget(escritorio_header)
+        
+        # Resumo do escritório
+        resumo_escritorio = api_response.get("resumo_impacto_escritorio", {})
+        resumo_escritorio_text = QLabel(
+            f"Problemas: {resumo_escritorio.get('total_problemas', 0)}\n"
+            f"Impacto: R$ {resumo_escritorio.get('valor_impacto_estimado', 0):.2f}\n"
+            f"Blocos: {', '.join(resumo_escritorio.get('blocos_afetados', []))}"
+        )
+        resumo_escritorio_text.setStyleSheet("""
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+        """)
+        escritorio_layout.addWidget(resumo_escritorio_text)
+        
+        # Registros excedentes no escritório
+        only_escritorio = api_response.get("comparacao_detalhada", {}).get("only_escritorio", [])
+        if only_escritorio:
+            excedentes_header = QLabel("REGISTROS À VERIFICAR")
+            excedentes_header.setStyleSheet("""
+                font-weight: bold;
+                font-size: 12px;
+                color: #28a745;
+                padding: 5px 0;
+            """)
+            escritorio_layout.addWidget(excedentes_header)
+            
+            for reg in only_escritorio:
+                reg_info = reg.get("record", {})
+                if isinstance(reg_info, dict):
+                    reg_tipo = reg_info.get("reg", "N/A")
+                    reg_linha = reg_info.get("line_no", "N/A")
+                else:
+                    reg_tipo = "N/A"
+                    reg_linha = "N/A"
+                
+                impacto = reg.get("impacto", 0)
+                
+                reg_text = QLabel(f"{reg_tipo} - Linha: {reg_linha} - R$ {impacto:.2f}")
+                reg_text.setStyleSheet("""
+                    background-color: #f1fff3;
+                    border: 1px solid #b8e6c1;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin: 2px 0;
+                """)
+                escritorio_layout.addWidget(reg_text)
+        
+        # Problemas do escritório
+        issues_escritorio = api_response.get("issues_escritorio", [])
+        if issues_escritorio:
+            problemas_header = QLabel("PROBLEMAS")
+            problemas_header.setStyleSheet("""
+                font-weight: bold;
+                font-size: 12px;
+                color: #17a2b8;
+                padding: 5px 0;
+            """)
+            escritorio_layout.addWidget(problemas_header)
+            
+            for issue in issues_escritorio:
+                issue_text = QLabel(
+                    f"Linha {issue.get('line_no', '')}: {issue.get('message', '')}\n"
+                    f"Sugestão: {issue.get('suggestion', '')}"
+                )
+                issue_text.setStyleSheet("""
+                    background-color: #e7f5f2;
+                    border: 1px solid #b2dfdb;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin: 2px 0;
+                """)
+                escritorio_layout.addWidget(issue_text)
+        
+        escritorio_layout.addStretch()
+        columns_layout.addWidget(escritorio_column, 1)
+        
+        self.results_layout.addWidget(columns_container)
+        
+        # Ações recomendadas
+        acoes_recomendadas = api_response.get("acao_recomendada", [])
+        if acoes_recomendadas:
+            acoes_header = QLabel("AÇÕES RECOMENDADAS")
+            acoes_header.setStyleSheet("""
+                font-weight: bold;
+                font-size: 14px;
+                padding: 10px;
+                background-color: #f8f9fa;
+                border-top: 1px solid #dee2e6;
+                margin-top: 15px;
+            """)
+            self.results_layout.addWidget(acoes_header)
+            
+            for acao in acoes_recomendadas:
+                acao_text = QLabel(acao.get("descricao", ""))
+                acao_text.setStyleSheet("""
+                    background-color: #e9ecef;
+                    border: 1px solid #ced4da;
+                    border-radius: 4px;
+                    padding: 10px;
+                    margin: 5px 0;
+                """)
+                self.results_layout.addWidget(acao_text)
+        
+        self.results_layout.addStretch()
 
     def generate_corrected_file(self):
         if not self.file1_path or not self.file2_path:
@@ -605,7 +703,25 @@ class ModernSPEDComparatorApp(QWidget):
                 self.status_indicator.setStyleSheet("background-color: #dc3545;")
     
     def clear_logs(self):
-        self.log_table.setRowCount(0)  # Limpa todas as linhas da tabela
+        # Limpa o layout de resultados
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Restaura o placeholder
+        self.results_placeholder = QLabel("Selecione os arquivos e clique em 'Comparar Arquivos'")
+        self.results_placeholder.setAlignment(Qt.AlignCenter)
+        self.results_placeholder.setStyleSheet("""
+            font-size: 16px;
+            color: #6c757d;
+            padding: 40px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+        """)
+        self.results_layout.addWidget(self.results_placeholder)
+        
         self.status_label.setText("Logs limpos")
         self.status_indicator.setStyleSheet("background-color: #6c757d;")
 

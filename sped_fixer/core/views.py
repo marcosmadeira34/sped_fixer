@@ -9,11 +9,15 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
-from .rules.main_rules import SPEDAutoFixer, SPEDComparator
-# from .sped_comparator import SPEDComparator
+from .rules.main_rules import SPEDAutoFixer
+from .rules.basic_rules_fiscal import SPEDComparator
 import chardet
 import traceback
 from .parsers import SpedParser
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from .rules.comparison import compare_records_by_key
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -105,7 +109,7 @@ class FixSped(View):
                                         continue
                             if decoded_content is None:
                                 raise ValueError(
-                                    f"Não foi possível decodificar o arquivo {uploaded_file.name} "
+                                    f"Nao foi possivel decodificar o arquivo {uploaded_file.name} "
                                     f"com encodings: utf-8, iso-8859-1, windows-1252, ascii"
                                 )
 
@@ -219,68 +223,241 @@ class FixSped(View):
 
 
 
-@csrf_exempt
-def compare_sped_files(request):
-    """
-    Endpoint para comparar dois arquivos SPED
-    """
-    if request.method == 'POST':
-        try:
-            # Verificar se os dois arquivos foram enviados
-            if 'reference_file' not in request.FILES or 'audit_file' not in request.FILES:
-                return JsonResponse({
-                    'status': 'error', 
-                    'message': 'Both reference and audit files are required'
-                }, status=400)
-            
-            reference_file = request.FILES['reference_file']
-            audit_file = request.FILES['audit_file']
-            
-            # Salvar os arquivos temporariamente
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as ref_temp:
-                for chunk in reference_file.chunks():
-                    ref_temp.write(chunk)
-                ref_path = ref_temp.name
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as aud_temp:
-                for chunk in audit_file.chunks():
-                    aud_temp.write(chunk)
-                aud_path = aud_temp.name
-            
-            # Processar os arquivos com o parser
-            parser = SpedParser()
-            ref_records = parser.parse(open(ref_path, 'r', encoding='latin-1').read())
-            aud_records = parser.parse(open(aud_path, 'r', encoding='latin-1').read())
-            
-            # Organizar os dados por tipo de registro
-            ref_data = {}
-            for record in ref_records:
-                reg_type = record.reg
-                if reg_type not in ref_data:
-                    ref_data[reg_type] = []
-                ref_data[reg_type].append(record)
-            
-            aud_data = {}
-            for record in aud_records:
-                reg_type = record.reg
-                if reg_type not in aud_data:
-                    aud_data[reg_type] = []
-                aud_data[reg_type].append(record)
-            
-            # Comparar os arquivos
-            comparator = SPEDComparator()
-            comparison_result = comparator.compare(ref_data, aud_data)
-            
-            # Remover arquivos temporários
-            os.unlink(ref_path)
-            os.unlink(aud_path)
-            
-            return JsonResponse({
-                'status': 'success',
-                'comparison': comparison_result
-            })
-            
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+def serialize_issue(issue):
+    result = {
+        "line_no": issue.line_no,
+        "reg": issue.reg,
+        "rule_id": issue.rule_id,
+        "severity": issue.severity,
+        "message": issue.message,
+        "suggestion": issue.suggestion
+    }
     
-    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
+    if hasattr(issue, 'impacted_records'):
+        result["impacted_records"] = [
+            {"reg": r.reg, "line_no": r.line_no} 
+            for r in issue.impacted_records
+        ]
+    
+    if hasattr(issue, 'impact_details'):
+        result["impact_details"] = issue.impact_details
+    
+    return result
+
+def generate_impact_summary(issues):
+    severity_count = {"error": 0, "warning": 0, "info": 0}
+    blocos_afetados = set()
+    valor_impacto = 0
+    
+    for issue in issues:
+        severity_count[issue.severity] += 1
+        if hasattr(issue, 'impact_details'):
+            for detail in issue.impact_details:
+                blocos_afetados.add(detail["bloco"])
+        
+        if hasattr(issue, 'record') and issue.record.reg == "C100":
+            try:
+                vl_icms = float(issue.record.fields[13]) if len(issue.record.fields) > 13 else 0
+                valor_impacto += abs(vl_icms)
+            except (ValueError, IndexError):
+                pass
+    
+    return {
+        "total_problemas": len(issues),
+        "por_severidade": severity_count,
+        "blocos_afetados": list(blocos_afetados),
+        "valor_impacto_estimado": valor_impacto
+    }
+
+def compare_contexts(context_cliente, context_escritorio):
+    divergencias = []
+    
+    # Exemplo: Comparar totais do Bloco C
+    def get_total_bloco_c(context):
+        total = 0
+        for record in context.records:
+            if record.reg == "C190":
+                try:
+                    total += float(record.fields[5])  # VL_ICMS
+                except (IndexError, ValueError):
+                    pass
+        return total
+    
+    total_cliente = get_total_bloco_c(context_cliente)
+    total_escritorio = get_total_bloco_c(context_escritorio)
+    
+    if abs(total_cliente - total_escritorio) > 0.01:
+        divergencias.append({
+            "tipo": "Divergência de Totais",
+            "bloco": "C",
+            "valor_cliente": total_cliente,
+            "valor_escritorio": total_escritorio,
+            "diferenca": total_cliente - total_escritorio,
+            "mensagem": f"Total do Bloco C diverge: Cliente R$ {total_cliente} vs Escritório R$ {total_escritorio}"
+        })
+    
+    return divergencias
+
+
+
+def try_read_file(file_path, encodings=None):
+    """
+    Tenta ler o arquivo com várias codificações diferentes.
+    Retorna o conteúdo e a codificação utilizada.
+    """
+    if encodings is None:
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'cp850']
+    
+    # Primeiro tenta detectar a codificação
+    try:
+        with open(file_path, 'rb') as f:
+            raw_data = f.read(10000)  # Lê os primeiros 10KB
+        detected = chardet.detect(raw_data)
+        if detected['confidence'] > 0.7:
+            # Se a confiança for alta, tenta primeiro com a codificação detectada
+            try:
+                with open(file_path, 'r', encoding=detected['encoding']) as f:
+                    content = f.read()
+                return content, detected['encoding']
+            except UnicodeDecodeError:
+                pass
+    except:
+        pass
+    
+    # Se a detecção falhar, tenta cada codificação da lista
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                content = f.read()
+            return content, encoding
+        except UnicodeDecodeError:
+            continue
+    
+    # Se nenhuma codificação funcionar, tenta ler com tratamento de erros
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        return content, 'utf-8 (with errors replaced)'
+    except Exception as e:
+        raise Exception(f"Não foi possível ler o arquivo com nenhuma codificação. Último erro: {str(e)}")
+
+
+
+def load_sped_file(file_path, sped_type='fiscal'):
+    """Carrega um arquivo SPED com tratamento robusto de codificação"""
+    try:
+        # Tenta ler o arquivo com várias codificações
+        content, encoding = try_read_file(file_path)
+        
+        # Cria um arquivo temporário com o conteúdo já decodificado
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as temp_file:
+            temp_file.write(content)
+            temp_path = temp_file.name
+        
+        try:
+            # Carrega o arquivo com a codificação correta
+            fixer = SPEDAutoFixer(temp_path, sped_type=sped_type)
+            issues = fixer.fix_all()
+            return fixer.context, issues, encoding
+        finally:
+            # Remove o arquivo temporário
+            os.unlink(temp_path)
+    except Exception as e:
+        raise Exception(f"Não foi possível processar o arquivo. Erro: {str(e)}")
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def compare_sped_files(request):
+    try:
+        cliente_file = request.FILES.get('cliente_file')
+        escritorio_file = request.FILES.get('escritorio_file')
+        
+        if not cliente_file or not escritorio_file:
+            return JsonResponse({"error": "Ambos os arquivos são obrigatórios"}, status=400)
+        
+        # Salva os arquivos temporariamente
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as cliente_temp:
+            # Escreve o conteúdo do arquivo como está, sem modificar a codificação
+            cliente_temp.write(cliente_file.read())
+            cliente_path = cliente_temp.name
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as escritorio_temp:
+            escritorio_temp.write(escritorio_file.read())
+            escritorio_path = escritorio_temp.name
+        
+        try:
+            # Processa os arquivos com tratamento robusto de codificação
+            context_cliente, issues_cliente, encoding_cliente = load_sped_file(cliente_path, sped_type='fiscal')
+            context_escritorio, issues_escritorio, encoding_escritorio = load_sped_file(escritorio_path, sped_type='fiscal')
+            
+            # Compara os contextos
+            divergencias = compare_contexts(context_cliente, context_escritorio)
+            comparacao_detalhada = compare_records_by_key(context_cliente, context_escritorio)
+            
+            result = {
+                "issues_cliente": [serialize_issue(issue) for issue in issues_cliente],
+                "issues_escritorio": [serialize_issue(issue) for issue in issues_escritorio],
+                "divergencias": divergencias,
+                "resumo_impacto_cliente": generate_impact_summary(issues_cliente),
+                "resumo_impacto_escritorio": generate_impact_summary(issues_escritorio),
+                "encoding_cliente": encoding_cliente,
+                "encoding_escritorio": encoding_escritorio,
+                "comparacao_detalhada": comparacao_detalhada,
+                "acao_recomendada": gerar_recomendacao_acao(comparacao_detalhada)
+            }
+            
+
+
+            return JsonResponse(result)
+        
+        finally:
+            # Remove os arquivos temporários
+            os.unlink(cliente_path)
+            os.unlink(escritorio_path)
+    
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+    
+
+def gerar_recomendacao_acao(comparacao):
+    """Gera recomendações de ação baseadas na comparação"""
+    recomendacoes = []
+    
+    # Verifica registros faltantes no cliente
+    only_escritorio = comparacao.get("only_escritorio", [])
+    if only_escritorio:
+        total_impacto = sum(r["impacto"] for r in only_escritorio)
+        recomendacoes.append({
+            "tipo": "ADICIONAR",
+            "destino": "CLIENTE",
+            "quantidade": len(only_escritorio),
+            "impacto_total": total_impacto,
+            "descricao": f"Adicionar {len(only_escritorio)} registros no arquivo do cliente (impacto total: R$ {total_impacto:.2f})",
+            "registros": only_escritorio[:5]  # Mostra até 5 exemplos
+        })
+    
+    # Verifica registros faltantes no escritório
+    only_cliente = comparacao.get("only_cliente", [])
+    if only_cliente:
+        total_impacto = sum(r["impacto"] for r in only_cliente)
+        recomendacoes.append({
+            "tipo": "REMOVER",
+            "destino": "ESCRITORIO",
+            "quantidade": len(only_cliente),
+            "impacto_total": total_impacto,
+            "descricao": f"Remover {len(only_cliente)} registros do arquivo do escritório (impacto total: R$ {total_impacto:.2f})",
+            "registros": only_cliente[:5]
+        })
+    
+    # Verifica valores diferentes
+    different_values = comparacao.get("diferent_values", [])
+    if different_values:
+        recomendacoes.append({
+            "tipo": "CORRIGIR",
+            "destino": "AMBOS",
+            "quantidade": len(different_values),
+            "descricao": f"Corrigir {len(different_values)} registros com valores divergentes",
+            "registros": different_values[:3]
+        })
+    
+    return recomendacoes

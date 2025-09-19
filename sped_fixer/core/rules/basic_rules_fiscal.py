@@ -2736,15 +2736,18 @@ class ConsistenciaC170_vs_C100(Rule):
             r for r in context.records
             if r.reg == "C170" and getattr(r, "parent", None) == record
         ]
+        print(f"Debug: Valores encontrados para C100 na linha {record.line_no}: {record.fields}")
 
         if not c170_children:
             # Se não houver C170, não como validar
             return []
         
         vl_total_itens = sum(self.to_float(r.fields[6]) for r in c170_children)
+        print(f"Debug: Total itens C170 para C100 na linha {record.line_no}: R$ {vl_total_itens}")
 
         # Valor total das mercadorias no C100 (campo 16 = VL_MERC)
         vl_merc = self.to_float(record.fields[15])
+        print(f"Debug: VL_MERC no C100 na linha {record.line_no}: R$ {vl_merc}")
 
         if abs(vl_total_itens - vl_merc) > 0.01:
             return [Issue(
@@ -2752,8 +2755,8 @@ class ConsistenciaC170_vs_C100(Rule):
                 reg=record.reg,
                 rule_id=self.id,
                 severity="error",
-                message=f"Soma de itens (R$ {vl_total_itens}) diverge do total das mercadorias (R$ {vl_merc})",
-                suggestion="Verificar itens C170 com valores incorretos"
+                message=f"Diferenca no total de itens (R$ {vl_total_itens}) vs VL_MERC (R$ {vl_merc}) - Diferenca encontrada: R$ {vl_total_itens - vl_merc:.2f}",
+                suggestion=f"Qtd de registros C170: {len(c170_children)} no arquivo deve ser revisada"
             )]
 
         return []
@@ -2798,3 +2801,5 @@ class SPEDComparator:
         similarity_percent = matched_count / total_records * 100
 
         return similarity_percent, divergences
+    
+

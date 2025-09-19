@@ -1,11 +1,12 @@
 from django.conf import settings
 from django.conf.urls.static import static
-from core.views import FixSped
+from core.views import FixSped, compare_sped_files
 from django.urls import path
 
 urlpatterns = [
     # ... suas outras URLs ...
     path('fix-sped/', FixSped.as_view(), name='fix_sped'),
+    path('compare-sped/', compare_sped_files, name='compare_sped'),
 ]
 
 # Adicionar serving de arquivos de mídia (apenas para desenvolvimento)

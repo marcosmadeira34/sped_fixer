@@ -3,26 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
-@dataclass
+# Em seu arquivo de regras (base.py ou rules.py)
+
 class Issue:
-    line_no: int
-    reg: str
-    rule_id: str
-    severity: str  # "error" | "warn"
-    message: str
-    suggestion: str = ""
-
-    def to_dict(self):
-        """Converte o objeto para dicionário serializável"""
-        return {
-            'line_no': self.line_no,
-            'reg': self.reg,
-            'rule_id': self.rule_id,
-            'severity': self.severity,
-            'message': self.message,
-            'suggestion': self.suggestion
-        }
-
+    def __init__(self, line_no, reg, rule_id, severity, message, suggestion=None):
+        self.line_no = line_no
+        self.reg = reg
+        self.rule_id = rule_id
+        self.severity = severity
+        self.message = message
+        self.suggestion = suggestion
+        self.impacted_records = []  # NOVO: Armazena registros afetados
+        self.impact_details = []    # NOVO: Detalhes do impacto (bloco, valor, etc.)
 
 class Rule:
     id: str = ""
@@ -38,10 +30,38 @@ class Rule:
         return
     
     
+# sped_analyzer/core/rules/base.py
+
 class Context:
-    def __init__(self):
-        self.meta: Dict[str, Any] = {}
-        self.seen: Dict[str, Any] = {}
+    def __init__(self, records):
+        self.records = records
+        self.sped_type = None  # Será definido posteriormente
+
+    def remove_record(self, record):
+        """Remove um registro da lista"""
+        if record in self.records:
+            self.records.remove(record)
+
+
+
+class Record:
+    def __init__(self, line_no, reg, fields):
+        self.line_no = line_no
+        self.reg = reg
+        self.fields = fields
+        # Referência para o registro pai (usada em registros como C170)
+        self.parent = None
+
+    def __str__(self):
+        return f"Registro {self.reg} (linha {self.line_no}): {self.fields}"
+    
+    def __repr__(self):
+        return self.__str__()
+
+
+class SpedFile:
+    def __init__(self, records):
+        self.records = records
 
 
 
